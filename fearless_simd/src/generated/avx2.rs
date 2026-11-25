@@ -2801,17 +2801,27 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn shlv_i16x8(self, a: i16x8<Self>, b: i16x8<Self>) -> i16x8<Self> {
-        [
-            i16::wrapping_shl(a[0usize], b[0usize] as u32),
-            i16::wrapping_shl(a[1usize], b[1usize] as u32),
-            i16::wrapping_shl(a[2usize], b[2usize] as u32),
-            i16::wrapping_shl(a[3usize], b[3usize] as u32),
-            i16::wrapping_shl(a[4usize], b[4usize] as u32),
-            i16::wrapping_shl(a[5usize], b[5usize] as u32),
-            i16::wrapping_shl(a[6usize], b[6usize] as u32),
-            i16::wrapping_shl(a[7usize], b[7usize] as u32),
-        ]
-        .simd_into(self)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: i16x8<Avx2>, b: i16x8<Avx2>) -> i16x8<Avx2> {
+                let val = a.into();
+                let counts = b.into();
+                let lo_mask = _mm_set1_epi16(0x00ff);
+                let pow2_lo = _mm_and_si128(
+                    _mm_shuffle_epi8(
+                        _mm_setr_epi8(1, 2, 4, 8, 16, 32, 64, -128, 0, 0, 0, 0, 0, 0, 0, 0),
+                        counts,
+                    ),
+                    lo_mask,
+                );
+                let pow2_hi = _mm_slli_epi16::<8>(_mm_shuffle_epi8(
+                    _mm_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 8, 16, 32, 64, -128),
+                    counts,
+                ));
+                _mm_mullo_epi16(val, _mm_or_si128(pow2_lo, pow2_hi)).simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn shr_i16x8(self, a: i16x8<Self>, shift: u32) -> i16x8<Self> {
@@ -3477,17 +3487,27 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn shlv_u16x8(self, a: u16x8<Self>, b: u16x8<Self>) -> u16x8<Self> {
-        [
-            u16::wrapping_shl(a[0usize], b[0usize] as u32),
-            u16::wrapping_shl(a[1usize], b[1usize] as u32),
-            u16::wrapping_shl(a[2usize], b[2usize] as u32),
-            u16::wrapping_shl(a[3usize], b[3usize] as u32),
-            u16::wrapping_shl(a[4usize], b[4usize] as u32),
-            u16::wrapping_shl(a[5usize], b[5usize] as u32),
-            u16::wrapping_shl(a[6usize], b[6usize] as u32),
-            u16::wrapping_shl(a[7usize], b[7usize] as u32),
-        ]
-        .simd_into(self)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: u16x8<Avx2>, b: u16x8<Avx2>) -> u16x8<Avx2> {
+                let val = a.into();
+                let counts = b.into();
+                let lo_mask = _mm_set1_epi16(0x00ff);
+                let pow2_lo = _mm_and_si128(
+                    _mm_shuffle_epi8(
+                        _mm_setr_epi8(1, 2, 4, 8, 16, 32, 64, -128, 0, 0, 0, 0, 0, 0, 0, 0),
+                        counts,
+                    ),
+                    lo_mask,
+                );
+                let pow2_hi = _mm_slli_epi16::<8>(_mm_shuffle_epi8(
+                    _mm_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 8, 16, 32, 64, -128),
+                    counts,
+                ));
+                _mm_mullo_epi16(val, _mm_or_si128(pow2_lo, pow2_hi)).simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn shr_u16x8(self, a: u16x8<Self>, shift: u32) -> u16x8<Self> {
@@ -10643,25 +10663,31 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn shlv_i16x16(self, a: i16x16<Self>, b: i16x16<Self>) -> i16x16<Self> {
-        [
-            i16::wrapping_shl(a[0usize], b[0usize] as u32),
-            i16::wrapping_shl(a[1usize], b[1usize] as u32),
-            i16::wrapping_shl(a[2usize], b[2usize] as u32),
-            i16::wrapping_shl(a[3usize], b[3usize] as u32),
-            i16::wrapping_shl(a[4usize], b[4usize] as u32),
-            i16::wrapping_shl(a[5usize], b[5usize] as u32),
-            i16::wrapping_shl(a[6usize], b[6usize] as u32),
-            i16::wrapping_shl(a[7usize], b[7usize] as u32),
-            i16::wrapping_shl(a[8usize], b[8usize] as u32),
-            i16::wrapping_shl(a[9usize], b[9usize] as u32),
-            i16::wrapping_shl(a[10usize], b[10usize] as u32),
-            i16::wrapping_shl(a[11usize], b[11usize] as u32),
-            i16::wrapping_shl(a[12usize], b[12usize] as u32),
-            i16::wrapping_shl(a[13usize], b[13usize] as u32),
-            i16::wrapping_shl(a[14usize], b[14usize] as u32),
-            i16::wrapping_shl(a[15usize], b[15usize] as u32),
-        ]
-        .simd_into(self)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: i16x16<Avx2>, b: i16x16<Avx2>) -> i16x16<Avx2> {
+                let val = a.into();
+                let counts = b.into();
+                let lo_mask = _mm256_set1_epi16(0x00ff);
+                let pow2_lo = _mm256_and_si256(
+                    _mm256_shuffle_epi8(
+                        _mm256_broadcastsi128_si256(_mm_setr_epi8(
+                            1, 2, 4, 8, 16, 32, 64, -128, 0, 0, 0, 0, 0, 0, 0, 0,
+                        )),
+                        counts,
+                    ),
+                    lo_mask,
+                );
+                let pow2_hi = _mm256_slli_epi16::<8>(_mm256_shuffle_epi8(
+                    _mm256_broadcastsi128_si256(_mm_setr_epi8(
+                        0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 8, 16, 32, 64, -128,
+                    )),
+                    counts,
+                ));
+                _mm256_mullo_epi16(val, _mm256_or_si256(pow2_lo, pow2_hi)).simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn shr_i16x16(self, a: i16x16<Self>, shift: u32) -> i16x16<Self> {
@@ -11291,25 +11317,31 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn shlv_u16x16(self, a: u16x16<Self>, b: u16x16<Self>) -> u16x16<Self> {
-        [
-            u16::wrapping_shl(a[0usize], b[0usize] as u32),
-            u16::wrapping_shl(a[1usize], b[1usize] as u32),
-            u16::wrapping_shl(a[2usize], b[2usize] as u32),
-            u16::wrapping_shl(a[3usize], b[3usize] as u32),
-            u16::wrapping_shl(a[4usize], b[4usize] as u32),
-            u16::wrapping_shl(a[5usize], b[5usize] as u32),
-            u16::wrapping_shl(a[6usize], b[6usize] as u32),
-            u16::wrapping_shl(a[7usize], b[7usize] as u32),
-            u16::wrapping_shl(a[8usize], b[8usize] as u32),
-            u16::wrapping_shl(a[9usize], b[9usize] as u32),
-            u16::wrapping_shl(a[10usize], b[10usize] as u32),
-            u16::wrapping_shl(a[11usize], b[11usize] as u32),
-            u16::wrapping_shl(a[12usize], b[12usize] as u32),
-            u16::wrapping_shl(a[13usize], b[13usize] as u32),
-            u16::wrapping_shl(a[14usize], b[14usize] as u32),
-            u16::wrapping_shl(a[15usize], b[15usize] as u32),
-        ]
-        .simd_into(self)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: u16x16<Avx2>, b: u16x16<Avx2>) -> u16x16<Avx2> {
+                let val = a.into();
+                let counts = b.into();
+                let lo_mask = _mm256_set1_epi16(0x00ff);
+                let pow2_lo = _mm256_and_si256(
+                    _mm256_shuffle_epi8(
+                        _mm256_broadcastsi128_si256(_mm_setr_epi8(
+                            1, 2, 4, 8, 16, 32, 64, -128, 0, 0, 0, 0, 0, 0, 0, 0,
+                        )),
+                        counts,
+                    ),
+                    lo_mask,
+                );
+                let pow2_hi = _mm256_slli_epi16::<8>(_mm256_shuffle_epi8(
+                    _mm256_broadcastsi128_si256(_mm_setr_epi8(
+                        0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 8, 16, 32, 64, -128,
+                    )),
+                    counts,
+                ));
+                _mm256_mullo_epi16(val, _mm256_or_si256(pow2_lo, pow2_hi)).simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn shr_u16x16(self, a: u16x16<Self>, shift: u32) -> u16x16<Self> {

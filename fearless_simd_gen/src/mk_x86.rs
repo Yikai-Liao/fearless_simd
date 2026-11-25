@@ -4213,6 +4213,13 @@ impl X86 {
                     self.handle_avx512_narrow_variable_shift(method, vec_ty, token)
                 })
             }
+            "shlv"
+                if matches!(self, Self::Sse4_2 | Self::Avx2)
+                    && matches!(vec_ty.scalar, ScalarType::Int | ScalarType::Unsigned)
+                    && vec_ty.scalar_bits == 16 =>
+            {
+                self.kernel_method(op, vec_ty, |token| self.handle_x86_shlv_16(vec_ty, token))
+            }
             "shlv" | "shrv"
                 if !(matches!(self, Self::Avx2 | Self::Avx512) && vec_ty.scalar_bits >= 32) =>
             {
@@ -4239,6 +4246,52 @@ impl X86 {
                     #expr.simd_into(#token)
                 }
             }),
+        }
+    }
+
+    fn handle_x86_shlv_16(&self, vec_ty: &VecType, token: &Ident) -> TokenStream {
+        assert!(
+            matches!(*self, Self::Sse4_2 | Self::Avx2),
+            "16-bit table variable left shifts are specialized for SSE4.2 and AVX2"
+        );
+        assert_eq!(vec_ty.scalar_bits, 16, "requires 16-bit lanes");
+
+        let bits = vec_ty.n_bits();
+        let shuffle = intrinsic_ident("shuffle", "epi8", bits);
+        let and = intrinsic_ident("and", coarse_type(vec_ty), bits);
+        let or = intrinsic_ident("or", coarse_type(vec_ty), bits);
+        let slli = intrinsic_ident("slli", "epi16", bits);
+        let mullo = intrinsic_ident("mullo", "epi16", bits);
+        let set1_epi16 = intrinsic_ident("set1", "epi16", bits);
+        let (lut_lo, lut_hi) = match bits {
+            128 => (
+                quote! { _mm_setr_epi8(1, 2, 4, 8, 16, 32, 64, -128, 0, 0, 0, 0, 0, 0, 0, 0) },
+                quote! { _mm_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 8, 16, 32, 64, -128) },
+            ),
+            256 => (
+                quote! {
+                    _mm256_broadcastsi128_si256(_mm_setr_epi8(
+                        1, 2, 4, 8, 16, 32, 64, -128, 0, 0, 0, 0, 0, 0, 0, 0,
+                    ))
+                },
+                quote! {
+                    _mm256_broadcastsi128_si256(_mm_setr_epi8(
+                        0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 8, 16, 32, 64, -128,
+                    ))
+                },
+            ),
+            _ => unreachable!("SSE4.2/AVX2 native width must be 128 or 256 bits"),
+        };
+
+        // Construct `1u16 << count` per lane using two byte-table lookups on the low byte
+        // of each 16-bit shift count, then multiply instead of unpacking to 32-bit lanes.
+        quote! {
+            let val = a.into();
+            let counts = b.into();
+            let lo_mask = #set1_epi16(0x00ff);
+            let pow2_lo = #and(#shuffle(#lut_lo, counts), lo_mask);
+            let pow2_hi = #slli::<8>(#shuffle(#lut_hi, counts));
+            #mullo(val, #or(pow2_lo, pow2_hi)).simd_into(#token)
         }
     }
 
