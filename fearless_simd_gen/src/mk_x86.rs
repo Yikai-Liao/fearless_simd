@@ -380,6 +380,11 @@ impl Level for X86 {
                     && matches!(vec_ty.scalar_bits, 32 | 64)
                 {
                     self.handle_avx2_dword_compact(op, vec_ty)
+                } else if *self == Self::Avx2
+                    && matches!(vec_ty.n_bits(), 256 | 512)
+                    && vec_ty.scalar_bits == 16
+                {
+                    self.handle_avx2_word_compact(op, vec_ty)
                 } else if matches!(*self, Self::Sse4_2 | Self::Avx2)
                     && vec_ty.n_bits() == 128
                     && matches!(vec_ty.scalar_bits, 16 | 32 | 64)
@@ -1521,6 +1526,248 @@ impl X86 {
                 let result = #finish;
                 #result.simd_into(#token)
             }
+        })
+    }
+
+    /// Compact 16-bit elements across 256- or 512-bit AVX2 vectors directly in registers
+    /// using the existing `compact_128::{COMPRESS_16, EXPAND_16}` tables.
+    fn handle_avx2_word_compact(&self, op: Op, vec_ty: &VecType) -> TokenStream {
+        assert!(*self == Self::Avx2, "wide word compaction requires AVX2");
+        assert!(
+            matches!(vec_ty.n_bits(), 256 | 512),
+            "requires one or two native AVX2 vectors"
+        );
+        assert_eq!(vec_ty.scalar_bits, 16, "requires 16-bit elements");
+
+        let vec = vec_ty.rust();
+        let to_bitmask = generic_op_name("to_bitmask", &vec_ty.mask_ty());
+        let is_512 = vec_ty.n_bits() == 512;
+
+        self.kernel_method(op, vec_ty, |token| match op.sig {
+            OpSig::Compress { merge } => {
+                let pair_count = if is_512 { 2 } else { 1 };
+                let compress_pairs = (0..pair_count).map(|pair| {
+                    let lo_expr = if pair == 0 {
+                        quote! { (mask_bits & 0xff) as usize }
+                    } else {
+                        let lo_shift = Literal::usize_unsuffixed(pair * 16);
+                        quote! { ((mask_bits >> #lo_shift) & 0xff) as usize }
+                    };
+                    let hi_shift = Literal::usize_unsuffixed(pair * 16 + 8);
+                    let b0 = format_ident!("b_{}", pair * 2);
+                    let b1 = format_ident!("b_{}", pair * 2 + 1);
+                    let compressed_pair = format_ident!("compressed_{pair}");
+                    let input = if is_512 {
+                        let idx = Literal::usize_unsuffixed(pair);
+                        quote! { values.val.0[#idx] }
+                    } else {
+                        quote! { values.val.0 }
+                    };
+                    quote! {
+                        let #b0 = #lo_expr;
+                        let #b1 = ((mask_bits >> #hi_shift) & 0xff) as usize;
+                        let ctrl_lo: __m128i = crate::transmute::checked_transmute_copy(
+                            &crate::support::compact_128::COMPRESS_16[#b0],
+                        );
+                        let ctrl_hi: __m128i = crate::transmute::checked_transmute_copy(
+                            &crate::support::compact_128::COMPRESS_16[#b1],
+                        );
+                        let compacted = _mm256_shuffle_epi8(#input, _mm256_set_m128i(ctrl_hi, ctrl_lo));
+                        let splice: __m256i = crate::transmute::checked_transmute_copy(
+                            &crate::support::COMPACT_16_SPLICE_CONTROLS[(#b0.count_ones() * 2) as usize],
+                        );
+                        let low = _mm256_permute2x128_si256::<0x80>(compacted, compacted);
+                        let high = _mm256_permute2x128_si256::<0x11>(compacted, compacted);
+                        let #compressed_pair = _mm256_or_si256(low, _mm256_shuffle_epi8(high, splice));
+                    }
+                });
+
+                let stitch = if is_512 {
+                    quote! {
+                        let first_bytes = ((mask_bits & 0xffff).count_ones() * 2) as usize;
+                        let controls = &crate::support::COMPACT_32_STITCH_CONTROLS[first_bytes];
+                        let left_same: __m256i = crate::transmute::checked_transmute_copy(&controls.left_same);
+                        let left_cross: __m256i = crate::transmute::checked_transmute_copy(&controls.left_cross);
+                        let right_same: __m256i = crate::transmute::checked_transmute_copy(&controls.right_same);
+                        let right_cross: __m256i = crate::transmute::checked_transmute_copy(&controls.right_cross);
+
+                        let low_to_high = _mm256_permute2x128_si256::<0x08>(compressed_1, compressed_1);
+                        let shifted_left = _mm256_or_si256(
+                            _mm256_shuffle_epi8(compressed_1, left_same),
+                            _mm256_shuffle_epi8(low_to_high, left_cross),
+                        );
+                        let compressed_0 = _mm256_or_si256(compressed_0, shifted_left);
+
+                        let high_to_low = _mm256_permute2x128_si256::<0x81>(compressed_1, compressed_1);
+                        let compressed_1 = _mm256_or_si256(
+                            _mm256_shuffle_epi8(compressed_1, right_same),
+                            _mm256_shuffle_epi8(high_to_low, right_cross),
+                        );
+                    }
+                } else {
+                    TokenStream::new()
+                };
+
+                let finish = match (is_512, merge) {
+                    (false, false) => quote! { compressed_0.simd_into(#token) },
+                    (false, true) => quote! {
+                        let output_bytes = (mask_bits.count_ones() * 2) as usize;
+                        let prefix: __m256i = crate::transmute::checked_transmute_copy(
+                            &crate::support::COMPACT_PREFIX_MASKS[output_bytes],
+                        );
+                        _mm256_blendv_epi8(merge.val.0, compressed_0, prefix).simd_into(#token)
+                    },
+                    (true, false) => quote! {
+                        #vec {
+                            val: crate::support::Aligned512([compressed_0, compressed_1]),
+                            simd: #token,
+                        }
+                    },
+                    (true, true) => quote! {
+                        let output_bytes = (mask_bits.count_ones() * 2) as usize;
+                        let prefix_0: __m256i = crate::transmute::checked_transmute_copy(
+                            &crate::support::COMPACT_PREFIX_MASKS[output_bytes.min(32)],
+                        );
+                        let prefix_1: __m256i = crate::transmute::checked_transmute_copy(
+                            &crate::support::COMPACT_PREFIX_MASKS[output_bytes.saturating_sub(32).min(32)],
+                        );
+                        let result_0 = _mm256_blendv_epi8(merge.val.0[0], compressed_0, prefix_0);
+                        let result_1 = _mm256_blendv_epi8(merge.val.0[1], compressed_1, prefix_1);
+                        #vec {
+                            val: crate::support::Aligned512([result_0, result_1]),
+                            simd: #token,
+                        }
+                    },
+                };
+
+                quote! {
+                    let mask_bits = #token.#to_bitmask(mask) as u32;
+                    #(#compress_pairs)*
+                    #stitch
+                    #finish
+                }
+            }
+            OpSig::Expand { merge } => {
+                // Active indices lie in 0..32 (256-bit) or 0..64 (512-bit), while
+                // inactive entries start at 0x80 and stay in 0x80..=0xb0 after adding
+                // block offsets <= 48. For block k (0..4), `(idx ^ (16 * k)) +_sat 112`
+                // maps `[16*k, 16*k + 15]` into `112..=127` (selecting lane `idx & 15`)
+                // and maps every other active or inactive byte into `>= 128` (zeroing).
+                if !is_512 {
+                    let finish = if merge {
+                        quote! {
+                            _mm256_blendv_epi8(merge.val.0, expanded, mask.val.0).simd_into(#token)
+                        }
+                    } else {
+                        quote! { expanded.simd_into(#token) }
+                    };
+                    quote! {
+                        let mask_bits = #token.#to_bitmask(mask) as u32;
+                        let b0 = (mask_bits & 0xff) as usize;
+                        let b1 = ((mask_bits >> 8) & 0xff) as usize;
+                        let ctrl0: __m128i = crate::transmute::checked_transmute_copy(
+                            &crate::support::compact_128::EXPAND_16[b0],
+                        );
+                        let ctrl1_raw: __m128i = crate::transmute::checked_transmute_copy(
+                            &crate::support::compact_128::EXPAND_16[b1],
+                        );
+                        let off1 = ((b0.count_ones() * 2) as u8).cast_signed();
+                        let ctrl1 = _mm_add_epi8(ctrl1_raw, _mm_set1_epi8(off1));
+                        let idx = _mm256_set_m128i(ctrl1, ctrl0);
+                        let bias = _mm256_set1_epi8(112);
+                        let v0 = _mm256_permute2x128_si256::<0x00>(values.val.0, values.val.0);
+                        let from_lo = _mm256_shuffle_epi8(v0, _mm256_adds_epu8(idx, bias));
+                        let from_hi = _mm256_shuffle_epi8(
+                            values.val.0,
+                            _mm256_adds_epu8(_mm256_xor_si256(idx, _mm256_set1_epi8(16)), bias),
+                        );
+                        let expanded = _mm256_or_si256(from_lo, from_hi);
+                        #finish
+                    }
+                } else {
+                    let finish = if merge {
+                        quote! {
+                            let result_0 = _mm256_blendv_epi8(merge.val.0[0], res01, mask.val.0[0]);
+                            let result_1 = _mm256_blendv_epi8(merge.val.0[1], res23, mask.val.0[1]);
+                            #vec {
+                                val: crate::support::Aligned512([result_0, result_1]),
+                                simd: #token,
+                            }
+                        }
+                    } else {
+                        quote! {
+                            #vec {
+                                val: crate::support::Aligned512([res01, res23]),
+                                simd: #token,
+                            }
+                        }
+                    };
+                    quote! {
+                        let mask_bits = #token.#to_bitmask(mask) as u32;
+                        let b0 = (mask_bits & 0xff) as usize;
+                        let b1 = ((mask_bits >> 8) & 0xff) as usize;
+                        let b2 = ((mask_bits >> 16) & 0xff) as usize;
+                        let b3 = ((mask_bits >> 24) & 0xff) as usize;
+                        let off1 = ((b0.count_ones() * 2) as u8).cast_signed();
+                        let off2 = (((mask_bits & 0xffff).count_ones() * 2) as u8).cast_signed();
+                        let off3 = ((((mask_bits & 0xffff).count_ones() + b2.count_ones()) * 2) as u8)
+                            .cast_signed();
+
+                        let ctrl0: __m128i = crate::transmute::checked_transmute_copy(
+                            &crate::support::compact_128::EXPAND_16[b0],
+                        );
+                        let ctrl1_raw: __m128i = crate::transmute::checked_transmute_copy(
+                            &crate::support::compact_128::EXPAND_16[b1],
+                        );
+                        let ctrl2_raw: __m128i = crate::transmute::checked_transmute_copy(
+                            &crate::support::compact_128::EXPAND_16[b2],
+                        );
+                        let ctrl3_raw: __m128i = crate::transmute::checked_transmute_copy(
+                            &crate::support::compact_128::EXPAND_16[b3],
+                        );
+                        let ctrl1 = _mm_add_epi8(ctrl1_raw, _mm_set1_epi8(off1));
+                        let ctrl2 = _mm_add_epi8(ctrl2_raw, _mm_set1_epi8(off2));
+                        let ctrl3 = _mm_add_epi8(ctrl3_raw, _mm_set1_epi8(off3));
+                        let idx01 = _mm256_set_m128i(ctrl1, ctrl0);
+                        let idx23 = _mm256_set_m128i(ctrl3, ctrl2);
+
+                        let bias = _mm256_set1_epi8(112);
+                        let flip16 = _mm256_set1_epi8(16);
+                        let flip32 = _mm256_set1_epi8(32);
+                        let flip48 = _mm256_set1_epi8(48);
+
+                        let v_lo = values.val.0[0];
+                        let v_hi = values.val.0[1];
+                        let v0 = _mm256_permute2x128_si256::<0x00>(v_lo, v_lo);
+                        let v1 = _mm256_permute2x128_si256::<0x11>(v_lo, v_lo);
+                        let v2 = _mm256_permute2x128_si256::<0x00>(v_hi, v_hi);
+
+                        let res01 = _mm256_or_si256(
+                            _mm256_shuffle_epi8(v0, _mm256_adds_epu8(idx01, bias)),
+                            _mm256_shuffle_epi8(
+                                v_lo,
+                                _mm256_adds_epu8(_mm256_xor_si256(idx01, flip16), bias),
+                            ),
+                        );
+                        let p0 = _mm256_shuffle_epi8(v0, _mm256_adds_epu8(idx23, bias));
+                        let p1 = _mm256_shuffle_epi8(
+                            v1,
+                            _mm256_adds_epu8(_mm256_xor_si256(idx23, flip16), bias),
+                        );
+                        let p2 = _mm256_shuffle_epi8(
+                            v2,
+                            _mm256_adds_epu8(_mm256_xor_si256(idx23, flip32), bias),
+                        );
+                        let p3 = _mm256_shuffle_epi8(
+                            v_hi,
+                            _mm256_adds_epu8(_mm256_xor_si256(idx23, flip48), bias),
+                        );
+                        let res23 = _mm256_or_si256(_mm256_or_si256(p0, p1), _mm256_or_si256(p2, p3));
+                        #finish
+                    }
+                }
+            }
+            _ => unreachable!("only compact operations use wide word compaction"),
         })
     }
 

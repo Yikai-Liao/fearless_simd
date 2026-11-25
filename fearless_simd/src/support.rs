@@ -89,7 +89,12 @@ pub(crate) mod compact_128 {
             N == 1 << lanes,
             "one control row is required per selection mask"
         );
-        let mut table = [Aligned128([0xff; 16]); N];
+        // Expansion may add a lane offset to each control byte; use 0x80 so
+        // inactive lanes stay out of range (>= 16, sign bit set) without
+        // carrying into adjacent bytes. Compression keeps 0xff so merge paths
+        // can reuse the sign bit directly.
+        let empty = if expand { 0x80 } else { 0xff };
+        let mut table = [Aligned128([empty; 16]); N];
         let mut mask = 0;
         while mask < N {
             let mut selected = 0;
