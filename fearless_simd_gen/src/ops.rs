@@ -1418,7 +1418,7 @@ assert_eq!(*i.reverse_bits(), [0xE6_A2_C4_80, 0xF7_B3_D5_91, 0xD0_50_90_10, 0xF0
         When shifting out of bounds (e.g. shifting a 32-bit value by 32 or more), the result is implementation-defined and may vary by platform.\n\n\
         # Performance\n\
         This per-lane shift is slower than shifting the entire vector by a scalar. \
-        It is not vectorized at all on WebAssembly, SSE4.2, and for `u8` and `i8` elements on AVX2. \
+        It is not vectorized at all on WebAssembly, on SSE4.2 for elements other than `u16` and `i16`, and for `u8` and `i8` elements on AVX2. \
         Prefer shifting by a single scalar value instead of by a vector whenever possible.",
     ),
     Op::new(

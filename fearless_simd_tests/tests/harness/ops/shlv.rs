@@ -61,6 +61,12 @@ fn shlv_i16x8<S: Simd>(simd: S) {
         *(a << shifts),
         [-32768, -32768, -32768, -32768, -32768, -2, 4080, -2048]
     );
+    let ones = i16x8::splat(simd, 1);
+    for first in [0, 8] {
+        let counts: [i16; 8] = core::array::from_fn(|i| first + i as i16);
+        let expected = counts.map(|count| 1_i16 << count);
+        assert_eq!(*(ones << i16x8::simd_from(simd, counts)), expected);
+    }
 }
 
 #[simd_test]
@@ -68,6 +74,12 @@ fn shlv_u16x8<S: Simd>(simd: S) {
     let a = u16x8::from_slice(simd, &[65535, 32768, 16384, 8192, 1, 255, 1024, 4096]);
     let shifts = u16x8::from_slice(simd, &[4, 1, 2, 3, 15, 4, 5, 0]);
     assert_eq!(*(a << shifts), [65520, 0, 0, 0, 32768, 4080, 32768, 4096]);
+    let ones = u16x8::splat(simd, 1);
+    for first in [0, 8] {
+        let counts: [u16; 8] = core::array::from_fn(|i| first + i as u16);
+        let expected = counts.map(|count| 1_u16 << count);
+        assert_eq!(*(ones << u16x8::simd_from(simd, counts)), expected);
+    }
 }
 
 #[simd_test]
@@ -111,6 +123,10 @@ fn shlv_u16x16<S: Simd>(simd: S) {
             65520, 0, 0, 0, 32768, 4080, 32768, 4096, 65520, 0, 0, 0, 32768, 4080, 32768, 4096
         ]
     );
+    let counts: [u16; 16] = core::array::from_fn(|i| i as u16);
+    let expected = counts.map(|count| 1_u16 << count);
+    let ones = u16x16::splat(simd, 1);
+    assert_eq!(*(ones << u16x16::simd_from(simd, counts)), expected);
 }
 
 #[simd_test]
@@ -152,6 +168,10 @@ fn shlv_i16x32<S: Simd>(simd: S) {
     let a = i16x32::from_slice(simd, &a_vals);
     let shifts = i16x32::from_slice(simd, &shift_vals);
     assert_eq!(*(a << shifts), expected);
+    let counts: [i16; 32] = core::array::from_fn(|i| (i % 16) as i16);
+    let expected = counts.map(|count| 1_i16 << count);
+    let ones = i16x32::splat(simd, 1);
+    assert_eq!(*(ones << i16x32::simd_from(simd, counts)), expected);
 }
 
 #[simd_test]
@@ -165,6 +185,10 @@ fn shlv_u16x32<S: Simd>(simd: S) {
     let a = u16x32::from_slice(simd, &a_vals);
     let shifts = u16x32::from_slice(simd, &shift_vals);
     assert_eq!(*(a << shifts), expected);
+    let counts: [u16; 32] = core::array::from_fn(|i| (i % 16) as u16);
+    let expected = counts.map(|count| 1_u16 << count);
+    let ones = u16x32::splat(simd, 1);
+    assert_eq!(*(ones << u16x32::simd_from(simd, counts)), expected);
 }
 
 #[simd_test]
@@ -281,6 +305,13 @@ fn shlv_i16x16<S: Simd>(simd: S) {
     let expected: [i16; 16] = core::array::from_fn(|i| values[i] << shift_values[i]);
     let result = simd.shlv_i16x16(a, shifts);
     assert_eq!(result.as_slice(), expected.as_slice());
+    let counts: [i16; 16] = core::array::from_fn(|i| i as i16);
+    let expected = counts.map(|count| 1_i16 << count);
+    let ones = i16x16::splat(simd, 1);
+    assert_eq!(
+        *simd.shlv_i16x16(ones, i16x16::simd_from(simd, counts)),
+        expected
+    );
 }
 
 #[simd_test]
