@@ -4782,19 +4782,9 @@ impl Simd for Sse4_2 {
     }
     #[inline(always)]
     fn pairwise_dot_product_i32x4(self, a: i32x4<Self>, b: i32x4<Self>) -> i64x2<Self> {
-        crate::kernel!(
-            #[inline(always)]
-            fn kernel(token: Sse4_2, a: i32x4<Sse4_2>, b: i32x4<Sse4_2>) -> i64x2<Sse4_2> {
-                let a = a.into();
-                let b = b.into();
-                _mm_add_epi64(
-                    _mm_mul_epi32(a, b),
-                    _mm_mul_epi32(_mm_shuffle_epi32::<0xf5>(a), _mm_shuffle_epi32::<0xf5>(b)),
-                )
-                .simd_into(token)
-            }
-        );
-        kernel(self, a, b)
+        let (low, high) = self.widening_mul_i32x4(a, b);
+        let (even, odd) = self.deinterleave_i64x2(low, high);
+        self.add_i64x2(even, odd)
     }
     #[inline(always)]
     fn narrow_i32x4(self, a: i32x4<Self>, b: i32x4<Self>) -> i16x8<Self> {

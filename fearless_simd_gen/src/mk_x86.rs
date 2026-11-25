@@ -3041,11 +3041,8 @@ impl X86 {
                     quote! { #madd(a.into(), b.into()).simd_into(#token) }
                 })
             }
-            (
-                Self::Sse4_2 | Self::Avx2 | Self::Avx512,
-                ScalarType::Int | ScalarType::Unsigned,
-                32,
-            ) => {
+            (Self::Sse4_2 | Self::Avx2 | Self::Avx512, ScalarType::Unsigned, 32)
+            | (Self::Avx512, ScalarType::Int, 32) => {
                 let signed = vec_ty.scalar == ScalarType::Int;
                 let mul = intrinsic_ident("mul", if signed { "epi32" } else { "epu32" }, bits);
                 let add = intrinsic_ident("add", "epi64", bits);
