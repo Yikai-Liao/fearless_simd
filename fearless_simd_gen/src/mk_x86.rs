@@ -338,16 +338,7 @@ impl Level for X86 {
             OpSig::PairwiseWideningAdd { target_ty } => {
                 self.handle_pairwise_widening_add(op, vec_ty, target_ty)
             }
-            OpSig::PairwiseDotProduct { .. } => {
-                if vec_ty.scalar == ScalarType::Int && vec_ty.scalar_bits == 16 {
-                    let madd = intrinsic_ident("madd", "epi16", vec_ty.n_bits());
-                    self.kernel_method(op, vec_ty, |token| {
-                        quote! { #madd(a.into(), b.into()).simd_into(#token) }
-                    })
-                } else {
-                    crate::generic::pairwise_dot_product_method(op, vec_ty)
-                }
-            }
+            OpSig::PairwiseDotProduct { .. } => self.handle_pairwise_dot_product(op, vec_ty),
             OpSig::WideningBinary { target_ty } => {
                 self.handle_widening_binary(op, vec_ty, target_ty)
             }
@@ -3039,6 +3030,84 @@ impl X86 {
         self.kernel_method(op, vec_ty, |token| {
             quote! { ({ #body }).simd_into(#token) }
         })
+    }
+
+    fn handle_pairwise_dot_product(&self, op: Op, vec_ty: &VecType) -> TokenStream {
+        let bits = vec_ty.n_bits();
+        match (self, vec_ty.scalar, vec_ty.scalar_bits) {
+            (_, ScalarType::Int, 16) => {
+                let madd = intrinsic_ident("madd", "epi16", bits);
+                self.kernel_method(op, vec_ty, |token| {
+                    quote! { #madd(a.into(), b.into()).simd_into(#token) }
+                })
+            }
+            (
+                Self::Sse4_2 | Self::Avx2 | Self::Avx512,
+                ScalarType::Int | ScalarType::Unsigned,
+                32,
+            ) => {
+                let signed = vec_ty.scalar == ScalarType::Int;
+                let mul = intrinsic_ident("mul", if signed { "epi32" } else { "epu32" }, bits);
+                let add = intrinsic_ident("add", "epi64", bits);
+                let (odd_a, odd_b) = if bits == 512 {
+                    // On 512-bit AVX-512, shifting avoids competing with shuffle ports on Zen 4
+                    // while keeping identical throughput on Intel Ice Lake.
+                    (
+                        quote! { _mm512_srli_epi64::<32>(a) },
+                        quote! { _mm512_srli_epi64::<32>(b) },
+                    )
+                } else {
+                    // Move odd dwords into the even positions consumed by PMULDQ/PMULUDQ.
+                    // Shuffles avoid contending with multiplies on Haswell's shift port and
+                    // avoid extra register copies on non-VEX SSE.
+                    let shuffle = intrinsic_ident("shuffle", "epi32", bits);
+                    (
+                        quote! { #shuffle::<0xf5>(a) },
+                        quote! { #shuffle::<0xf5>(b) },
+                    )
+                };
+                self.kernel_method(op, vec_ty, |token| {
+                    quote! {
+                        let a = a.into();
+                        let b = b.into();
+                        #add(#mul(a, b), #mul(#odd_a, #odd_b)).simd_into(#token)
+                    }
+                })
+            }
+            (Self::Sse4_2 | Self::Avx2 | Self::Avx512, ScalarType::Unsigned, 8) => {
+                let set1 = intrinsic_ident("set1", "epi16", bits);
+                let and = intrinsic_ident("and", coarse_type(vec_ty), bits);
+                let srli = intrinsic_ident("srli", "epi16", bits);
+                let mullo = intrinsic_ident("mullo", "epi16", bits);
+                let add = intrinsic_ident("add", "epi16", bits);
+                self.kernel_method(op, vec_ty, |token| {
+                    quote! {
+                        let a = a.into();
+                        let b = b.into();
+                        let mask = #set1(0x00ff);
+                        let even = #mullo(#and(a, mask), #and(b, mask));
+                        let odd = #mullo(#srli::<8>(a), #srli::<8>(b));
+                        #add(even, odd).simd_into(#token)
+                    }
+                })
+            }
+            (Self::Sse4_2 | Self::Avx2 | Self::Avx512, ScalarType::Int, 8) => {
+                let slli = intrinsic_ident("slli", "epi16", bits);
+                let srai = intrinsic_ident("srai", "epi16", bits);
+                let mullo = intrinsic_ident("mullo", "epi16", bits);
+                let add = intrinsic_ident("add", "epi16", bits);
+                self.kernel_method(op, vec_ty, |token| {
+                    quote! {
+                        let a = a.into();
+                        let b = b.into();
+                        let even = #mullo(#srai::<8>(#slli::<8>(a)), #srai::<8>(#slli::<8>(b)));
+                        let odd = #mullo(#srai::<8>(a), #srai::<8>(b));
+                        #add(even, odd).simd_into(#token)
+                    }
+                })
+            }
+            _ => crate::generic::pairwise_dot_product_method(op, vec_ty),
+        }
     }
 
     fn handle_widening_binary(&self, op: Op, vec_ty: &VecType, target_ty: VecType) -> TokenStream {

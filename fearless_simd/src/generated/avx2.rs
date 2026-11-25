@@ -1531,9 +1531,20 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn pairwise_dot_product_i8x16(self, a: i8x16<Self>, b: i8x16<Self>) -> i16x8<Self> {
-        let (low, high) = self.widening_mul_i8x16(a, b);
-        let (even, odd) = self.deinterleave_i16x8(low, high);
-        self.add_i16x8(even, odd)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: i8x16<Avx2>, b: i8x16<Avx2>) -> i16x8<Avx2> {
+                let a = a.into();
+                let b = b.into();
+                let even = _mm_mullo_epi16(
+                    _mm_srai_epi16::<8>(_mm_slli_epi16::<8>(a)),
+                    _mm_srai_epi16::<8>(_mm_slli_epi16::<8>(b)),
+                );
+                let odd = _mm_mullo_epi16(_mm_srai_epi16::<8>(a), _mm_srai_epi16::<8>(b));
+                _mm_add_epi16(even, odd).simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn splat_u8x16(self, val: u8) -> u8x16<Self> {
@@ -2335,9 +2346,18 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn pairwise_dot_product_u8x16(self, a: u8x16<Self>, b: u8x16<Self>) -> u16x8<Self> {
-        let (low, high) = self.widening_mul_u8x16(a, b);
-        let (even, odd) = self.deinterleave_u16x8(low, high);
-        self.add_u16x8(even, odd)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: u8x16<Avx2>, b: u8x16<Avx2>) -> u16x8<Avx2> {
+                let a = a.into();
+                let b = b.into();
+                let mask = _mm_set1_epi16(0x00ff);
+                let even = _mm_mullo_epi16(_mm_and_si128(a, mask), _mm_and_si128(b, mask));
+                let odd = _mm_mullo_epi16(_mm_srli_epi16::<8>(a), _mm_srli_epi16::<8>(b));
+                _mm_add_epi16(even, odd).simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn splat_mask8x16(self, val: bool) -> mask8x16<Self> {
@@ -4798,9 +4818,19 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn pairwise_dot_product_i32x4(self, a: i32x4<Self>, b: i32x4<Self>) -> i64x2<Self> {
-        let (low, high) = self.widening_mul_i32x4(a, b);
-        let (even, odd) = self.deinterleave_i64x2(low, high);
-        self.add_i64x2(even, odd)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: i32x4<Avx2>, b: i32x4<Avx2>) -> i64x2<Avx2> {
+                let a = a.into();
+                let b = b.into();
+                _mm_add_epi64(
+                    _mm_mul_epi32(a, b),
+                    _mm_mul_epi32(_mm_shuffle_epi32::<0xf5>(a), _mm_shuffle_epi32::<0xf5>(b)),
+                )
+                .simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn narrow_i32x4(self, a: i32x4<Self>, b: i32x4<Self>) -> i16x8<Self> {
@@ -5426,9 +5456,19 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn pairwise_dot_product_u32x4(self, a: u32x4<Self>, b: u32x4<Self>) -> u64x2<Self> {
-        let (low, high) = self.widening_mul_u32x4(a, b);
-        let (even, odd) = self.deinterleave_u64x2(low, high);
-        self.add_u64x2(even, odd)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: u32x4<Avx2>, b: u32x4<Avx2>) -> u64x2<Avx2> {
+                let a = a.into();
+                let b = b.into();
+                _mm_add_epi64(
+                    _mm_mul_epu32(a, b),
+                    _mm_mul_epu32(_mm_shuffle_epi32::<0xf5>(a), _mm_shuffle_epi32::<0xf5>(b)),
+                )
+                .simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn narrow_u32x4(self, a: u32x4<Self>, b: u32x4<Self>) -> u16x8<Self> {
@@ -9205,9 +9245,20 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn pairwise_dot_product_i8x32(self, a: i8x32<Self>, b: i8x32<Self>) -> i16x16<Self> {
-        let (low, high) = self.widening_mul_i8x32(a, b);
-        let (even, odd) = self.deinterleave_i16x16(low, high);
-        self.add_i16x16(even, odd)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: i8x32<Avx2>, b: i8x32<Avx2>) -> i16x16<Avx2> {
+                let a = a.into();
+                let b = b.into();
+                let even = _mm256_mullo_epi16(
+                    _mm256_srai_epi16::<8>(_mm256_slli_epi16::<8>(a)),
+                    _mm256_srai_epi16::<8>(_mm256_slli_epi16::<8>(b)),
+                );
+                let odd = _mm256_mullo_epi16(_mm256_srai_epi16::<8>(a), _mm256_srai_epi16::<8>(b));
+                _mm256_add_epi16(even, odd).simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn splat_u8x32(self, val: u8) -> u8x32<Self> {
@@ -10117,9 +10168,18 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn pairwise_dot_product_u8x32(self, a: u8x32<Self>, b: u8x32<Self>) -> u16x16<Self> {
-        let (low, high) = self.widening_mul_u8x32(a, b);
-        let (even, odd) = self.deinterleave_u16x16(low, high);
-        self.add_u16x16(even, odd)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: u8x32<Avx2>, b: u8x32<Avx2>) -> u16x16<Avx2> {
+                let a = a.into();
+                let b = b.into();
+                let mask = _mm256_set1_epi16(0x00ff);
+                let even = _mm256_mullo_epi16(_mm256_and_si256(a, mask), _mm256_and_si256(b, mask));
+                let odd = _mm256_mullo_epi16(_mm256_srli_epi16::<8>(a), _mm256_srli_epi16::<8>(b));
+                _mm256_add_epi16(even, odd).simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn splat_mask8x32(self, val: bool) -> mask8x32<Self> {
@@ -12551,9 +12611,22 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn pairwise_dot_product_i32x8(self, a: i32x8<Self>, b: i32x8<Self>) -> i64x4<Self> {
-        let (low, high) = self.widening_mul_i32x8(a, b);
-        let (even, odd) = self.deinterleave_i64x4(low, high);
-        self.add_i64x4(even, odd)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: i32x8<Avx2>, b: i32x8<Avx2>) -> i64x4<Avx2> {
+                let a = a.into();
+                let b = b.into();
+                _mm256_add_epi64(
+                    _mm256_mul_epi32(a, b),
+                    _mm256_mul_epi32(
+                        _mm256_shuffle_epi32::<0xf5>(a),
+                        _mm256_shuffle_epi32::<0xf5>(b),
+                    ),
+                )
+                .simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn narrow_i32x8(self, a: i32x8<Self>, b: i32x8<Self>) -> i16x16<Self> {
@@ -13176,9 +13249,22 @@ impl Simd for Avx2 {
     }
     #[inline(always)]
     fn pairwise_dot_product_u32x8(self, a: u32x8<Self>, b: u32x8<Self>) -> u64x4<Self> {
-        let (low, high) = self.widening_mul_u32x8(a, b);
-        let (even, odd) = self.deinterleave_u64x4(low, high);
-        self.add_u64x4(even, odd)
+        crate::kernel!(
+            #[inline(always)]
+            fn kernel(token: Avx2, a: u32x8<Avx2>, b: u32x8<Avx2>) -> u64x4<Avx2> {
+                let a = a.into();
+                let b = b.into();
+                _mm256_add_epi64(
+                    _mm256_mul_epu32(a, b),
+                    _mm256_mul_epu32(
+                        _mm256_shuffle_epi32::<0xf5>(a),
+                        _mm256_shuffle_epi32::<0xf5>(b),
+                    ),
+                )
+                .simd_into(token)
+            }
+        );
+        kernel(self, a, b)
     }
     #[inline(always)]
     fn narrow_u32x8(self, a: u32x8<Self>, b: u32x8<Self>) -> u16x16<Self> {
